@@ -1,4 +1,9 @@
-export const mergePlayAutocomplete = <T>(groups: T[][], slots: number): T[] => {
+import {APIApplicationCommandOptionChoice} from 'discord-api-types/v10';
+
+export const mergePlayAutocomplete = (
+  groups: APIApplicationCommandOptionChoice[][],
+  slots: number,
+): APIApplicationCommandOptionChoice[] => {
   const cap = Math.max(0, slots);
   const present = groups.filter(group => group.length > 0);
   if (cap === 0 || present.length === 0) {
