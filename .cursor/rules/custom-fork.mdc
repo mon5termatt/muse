@@ -8,5 +8,5 @@ alwaysApply: true
 - `origin` is `mon5termatt/muse`. `upstream` is `museofficial/muse`.
 - Custom work is a first-class Navidrome/Subsonic `MediaSource` that streams from the local library.
 - Do not convert Navidrome tracks to YouTube. Do not treat library songs as `MediaSource.HLS` (that path is live radio: no duration, no seek).
-- YouTube stays the default `/play` search. Library search is opt-in via `/play source:library`.
+- Default `/play` searches Navidrome first (artists play a discography, albums play all tracks) and falls back to YouTube. `source:youtube` / `source:library` force one source.
 - Do not implement Deezer, deemix, or downloads into Navidrome unless explicitly asked.

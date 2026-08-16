@@ -8,7 +8,7 @@ import SpotifyAPI, {SpotifyTrack} from './spotify-api.js';
 import NavidromeAPI from './navidrome-api.js';
 import {URL} from 'node:url';
 
-export type PlaySource = 'youtube' | 'library';
+export type PlaySource = 'auto' | 'youtube' | 'library';
 
 @injectable()
 export default class {
@@ -30,7 +30,7 @@ export default class {
     query: string,
     playlistLimit: number,
     shouldSplitChapters: boolean,
-    source: PlaySource = 'youtube',
+    source: PlaySource = 'auto',
   ): Promise<[SongMetadata[], string]> {
     const newSongs: SongMetadata[] = [];
     let extraMsg = '';
@@ -46,7 +46,7 @@ export default class {
     const supportedProtocols = ['http:', 'https:', 'spotify:', 'navidrome:'];
 
     if (!url || !supportedProtocols.includes(url.protocol)) {
-      return this.fromFreeText(query, shouldSplitChapters, source);
+      return this.fromFreeText(query, playlistLimit, shouldSplitChapters, source);
     }
 
     const YOUTUBE_HOSTS = [
@@ -111,19 +111,23 @@ export default class {
     return [newSongs, extraMsg];
   }
 
-  private async fromFreeText(query: string, shouldSplitChapters: boolean, source: PlaySource): Promise<[SongMetadata[], string]> {
-    if (source === 'library') {
-      if (this.navidromeAPI === undefined) {
-        throw new Error('Navidrome is not enabled!');
+  private async fromFreeText(query: string, playlistLimit: number, shouldSplitChapters: boolean, source: PlaySource): Promise<[SongMetadata[], string]> {
+    if (source !== 'youtube' && this.navidromeAPI) {
+      const songs = await this.navidromeAPI.search(query, playlistLimit, {
+        allowSongFallback: source === 'library',
+      });
+
+      if (songs.length > 0) {
+        return [songs, ''];
       }
 
-      const songs = await this.navidromeAPI.search(query);
-
-      if (songs.length === 0) {
+      if (source === 'library') {
         throw new Error('that doesn\'t exist');
       }
+    }
 
-      return [songs, ''];
+    if (source === 'library') {
+      throw new Error('Navidrome is not enabled!');
     }
 
     const songs = await this.youtubeVideoSearch(query, shouldSplitChapters);

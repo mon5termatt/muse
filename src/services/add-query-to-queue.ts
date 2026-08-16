@@ -42,7 +42,7 @@ export default class AddQueryToQueue {
     shouldSplitChapters,
     skipCurrentTrack,
     interaction,
-    source = 'youtube',
+    source = 'auto',
   }: {
     query: string;
     addToFrontOfQueue: boolean;

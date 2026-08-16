@@ -20,6 +20,7 @@ interface SubsonicChild {
   title?: string;
   album?: string;
   artist?: string;
+  artistId?: string;
   duration?: number;
   coverArt?: string;
   albumId?: string;
@@ -28,7 +29,16 @@ interface SubsonicChild {
 interface SubsonicAlbum {
   id: string;
   name?: string;
+  artist?: string;
+  coverArt?: string;
   song?: SubsonicChild[];
+}
+
+interface SubsonicArtist {
+  id: string;
+  name?: string;
+  coverArt?: string;
+  album?: SubsonicAlbum[];
 }
 
 interface SubsonicPlaylist {
@@ -44,7 +54,7 @@ interface SubsonicEnvelope<T extends Record<string, unknown>> {
   };
 }
 
-export type NavidromeResourceType = 'song' | 'album' | 'playlist';
+export type NavidromeResourceType = 'song' | 'album' | 'playlist' | 'artist';
 
 export interface NavidromeResource {
   type: NavidromeResourceType;
@@ -95,7 +105,7 @@ export default class {
     if (url.protocol === 'navidrome:') {
       const hostType = url.host as NavidromeResourceType;
       const id = decodeURIComponent(url.pathname.replace(/^\//, ''));
-      if ((hostType === 'song' || hostType === 'album' || hostType === 'playlist') && id) {
+      if ((hostType === 'song' || hostType === 'album' || hostType === 'playlist' || hostType === 'artist') && id) {
         return {type: hostType, id};
       }
 
@@ -103,7 +113,7 @@ export default class {
     }
 
     const hash = url.hash.replace(/^#/, '');
-    const hashMatch = /^\/(album|playlist|song)\/([^/?]+)/.exec(hash);
+    const hashMatch = /^\/(album|playlist|song|artist)\/([^/?]+)/.exec(hash);
     if (hashMatch) {
       return {
         type: hashMatch[1] as NavidromeResourceType,
@@ -111,7 +121,7 @@ export default class {
       };
     }
 
-    const pathMatch = /\/(album|playlist|song)\/([^/]+)/.exec(url.pathname);
+    const pathMatch = /\/(album|playlist|song|artist)\/([^/]+)/.exec(url.pathname);
     if (pathMatch) {
       return {
         type: pathMatch[1] as NavidromeResourceType,
@@ -132,26 +142,85 @@ export default class {
       return {type: 'playlist', id: queryId};
     }
 
+    if (queryId && /getArtist/i.test(url.pathname)) {
+      return {type: 'artist', id: queryId};
+    }
+
     return null;
   }
 
-  async search(query: string): Promise<SongMetadata[]> {
-    const songs = await this.searchSongs(query, 1);
+  async search(query: string, playlistLimit: number, options: {allowSongFallback?: boolean} = {}): Promise<SongMetadata[]> {
+    const allowSongFallback = options.allowSongFallback ?? true;
+    const {artists, albums, songs} = await this.searchLibrary(query, {
+      artistCount: 10,
+      albumCount: 10,
+      songCount: 10,
+    });
+
+    const artist = this.pickArtistMatch(query, artists, songs);
+    if (artist) {
+      return this.getArtistDiscography(artist.id, playlistLimit);
+    }
+
+    const album = this.pickAlbumMatch(query, albums, songs);
+    if (album) {
+      return this.getAlbum(album.id, playlistLimit);
+    }
+
+    const exactSong = songs.find(song => this.namesMatch(song.title, query));
+    if (exactSong) {
+      return [this.toSongMetadata(exactSong)];
+    }
+
+    const partialArtist = this.pickPartialArtistMatch(query, artists, songs);
+    if (partialArtist) {
+      return this.getArtistDiscography(partialArtist.id, playlistLimit);
+    }
+
+    if (!allowSongFallback) {
+      return [];
+    }
+
     const first = songs.at(0);
     return first ? [this.toSongMetadata(first)] : [];
   }
 
   async suggest(query: string, limit = 10): Promise<NavidromeSuggestion[]> {
-    const songs = await this.searchSongs(query, limit);
-    return songs.map(song => {
+    const artistSlots = Math.min(3, Math.ceil(limit / 3));
+    const albumSlots = Math.min(3, Math.ceil(limit / 3));
+    const {artists, albums, songs} = await this.searchLibrary(query, {
+      artistCount: artistSlots,
+      albumCount: albumSlots,
+      songCount: limit,
+    });
+
+    const artistSuggestions = artists.slice(0, artistSlots).map(artist => ({
+      name: this.truncateChoice(`Library: 🎤 ${this.displayText(artist.name, artist.id)}`),
+      value: this.getResourceUri('artist', artist.id),
+    }));
+
+    const remainingAfterArtists = Math.max(0, limit - artistSuggestions.length);
+    const albumSuggestions = albums.slice(0, Math.min(albumSlots, remainingAfterArtists)).map(album => {
+      const albumName = this.displayText(album.name, album.id);
+      const artist = this.displayText(album.artist, '');
+      const label = artist === '' ? albumName : `${albumName} - ${artist}`;
+      return {
+        name: this.truncateChoice(`Library: 💿 ${label}`),
+        value: this.getResourceUri('album', album.id),
+      };
+    });
+
+    const remaining = Math.max(0, limit - artistSuggestions.length - albumSuggestions.length);
+    const songSuggestions = songs.slice(0, remaining).map(song => {
       const artist = this.displayText(song.artist, 'Unknown artist');
       const title = this.displayText(song.title, song.id);
-      const name = this.truncateChoice(`Library: ${artist} - ${title}`);
       return {
-        name,
+        name: this.truncateChoice(`Library: 🎵 ${artist} - ${title}`),
         value: this.getResourceUri('song', song.id),
       };
     });
+
+    return [...artistSuggestions, ...albumSuggestions, ...songSuggestions];
   }
 
   async resolveUrl(input: string | URL, playlistLimit: number): Promise<SongMetadata[]> {
@@ -168,6 +237,8 @@ export default class {
 
       case 'album':
         return this.getAlbum(resource.id, playlistLimit);
+      case 'artist':
+        return this.getArtistDiscography(resource.id, playlistLimit);
       case 'playlist':
         return this.getPlaylist(resource.id, playlistLimit);
       default:
@@ -214,6 +285,32 @@ export default class {
       .map(song => this.toSongMetadata(song, playlist));
   }
 
+  async getArtistDiscography(id: string, playlistLimit: number): Promise<SongMetadata[]> {
+    const response = await this.request<{artist?: SubsonicArtist}>('getArtist.view', {id});
+    const {artist} = response;
+    if (!artist) {
+      return [];
+    }
+
+    const playlist: QueuedPlaylist = {
+      title: artist.name ?? 'Artist',
+      source: this.getResourceUri('artist', artist.id),
+    };
+
+    const songs: SongMetadata[] = [];
+    for (const album of artist.album ?? []) {
+      if (songs.length >= playlistLimit) {
+        break;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const albumSongs = await this.getAlbum(album.id, playlistLimit - songs.length);
+      songs.push(...albumSongs.map(song => ({...song, playlist})));
+    }
+
+    return songs;
+  }
+
   getStreamUrl(songId: string): string {
     return this.buildRestUrl('stream.view', {id: songId});
   }
@@ -226,15 +323,90 @@ export default class {
     return `navidrome://${type}/${encodeURIComponent(id)}`;
   }
 
-  private async searchSongs(query: string, songCount: number): Promise<SubsonicChild[]> {
-    const response = await this.request<{searchResult3?: {song?: SubsonicChild[]}}>('search3.view', {
+  private async searchLibrary(query: string, counts: {albumCount: number; artistCount: number; songCount: number}): Promise<{
+    albums: SubsonicAlbum[];
+    artists: SubsonicArtist[];
+    songs: SubsonicChild[];
+  }> {
+    const response = await this.request<{searchResult3?: {
+      album?: SubsonicAlbum[];
+      artist?: SubsonicArtist[];
+      song?: SubsonicChild[];
+    };}>('search3.view', {
       query,
-      songCount: String(songCount),
-      artistCount: '0',
-      albumCount: '0',
+      albumCount: String(counts.albumCount),
+      artistCount: String(counts.artistCount),
+      songCount: String(counts.songCount),
     });
 
-    return response.searchResult3?.song ?? [];
+    return {
+      albums: response.searchResult3?.album ?? [],
+      artists: response.searchResult3?.artist ?? [],
+      songs: response.searchResult3?.song ?? [],
+    };
+  }
+
+  private pickArtistMatch(query: string, artists: SubsonicArtist[], songs: SubsonicChild[]): SubsonicArtist | undefined {
+    const exactArtist = artists.find(artist => this.namesMatch(artist.name, query));
+    if (exactArtist) {
+      return exactArtist;
+    }
+
+    const songFromNamedArtist = songs.find(song => this.namesMatch(song.artist, query) && Boolean(song.artistId));
+    if (songFromNamedArtist?.artistId) {
+      return artists.find(artist => artist.id === songFromNamedArtist.artistId) ?? {
+        id: songFromNamedArtist.artistId,
+        name: songFromNamedArtist.artist,
+      };
+    }
+
+    return undefined;
+  }
+
+  private pickPartialArtistMatch(query: string, artists: SubsonicArtist[], songs: SubsonicChild[]): SubsonicArtist | undefined {
+    if (songs.some(song => this.namesMatch(song.title, query))) {
+      return undefined;
+    }
+
+    return artists.find(artist => this.nameContains(artist.name, query));
+  }
+
+  private pickAlbumMatch(query: string, albums: SubsonicAlbum[], songs: SubsonicChild[]): SubsonicAlbum | undefined {
+    const exactAlbum = albums.find(album => this.namesMatch(album.name, query));
+    if (exactAlbum) {
+      return exactAlbum;
+    }
+
+    const songFromNamedAlbum = songs.find(song => this.namesMatch(song.album, query) && Boolean(song.albumId));
+    if (songFromNamedAlbum?.albumId) {
+      return albums.find(album => album.id === songFromNamedAlbum.albumId) ?? {
+        id: songFromNamedAlbum.albumId,
+        name: songFromNamedAlbum.album,
+        artist: songFromNamedAlbum.artist,
+      };
+    }
+
+    if (songs.some(song => this.namesMatch(song.title, query))) {
+      return undefined;
+    }
+
+    return albums.find(album => this.nameContains(album.name, query));
+  }
+
+  private namesMatch(left: string | undefined, right: string | undefined): boolean {
+    const a = this.normalizeName(left);
+    const b = this.normalizeName(right);
+    return a !== '' && a === b;
+  }
+
+  private nameContains(haystack: string | undefined, needle: string | undefined): boolean {
+    const h = this.normalizeName(haystack);
+    const n = this.normalizeName(needle);
+    return h !== '' && n !== '' && (h.includes(n) || n.includes(h));
+  }
+
+  private normalizeName(value: string | undefined): string {
+    return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
   }
 
   private toSongMetadata(song: SubsonicChild, playlist: QueuedPlaylist | null = null): SongMetadata {

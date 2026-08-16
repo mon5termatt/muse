@@ -196,15 +196,38 @@ describe('GetSongs collection limits and conversion accounting', () => {
 });
 
 describe('GetSongs Navidrome library routing', () => {
-  it('keeps YouTube as the default free-text search when Navidrome is enabled', async () => {
+  it('prefers a Navidrome match for default free-text search', async () => {
     const navidromeAPI = makeNavidromeAPI();
+    const result = [makeSong('Library result', 'song-id')];
+    navidromeAPI.search.mockResolvedValue(result);
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+
+    await expect(getSongs.getSongs('daft punk', 20, true)).resolves.toEqual([result, '']);
+    expect(navidromeAPI.search).toHaveBeenCalledWith('daft punk', 20, {allowSongFallback: false});
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+  });
+
+  it('falls back to YouTube when default search has no confident library match', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    navidromeAPI.search.mockResolvedValue([]);
     const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
     const result = [makeSong('Search result')];
     youtubeAPI.search.mockResolvedValue(result);
 
     await expect(getSongs.getSongs('lofi beats', 20, true)).resolves.toEqual([result, '']);
+    expect(navidromeAPI.search).toHaveBeenCalledWith('lofi beats', 20, {allowSongFallback: false});
     expect(youtubeAPI.search).toHaveBeenCalledWith('lofi beats', true);
+  });
+
+  it('skips Navidrome when source is youtube', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+    const result = [makeSong('Search result')];
+    youtubeAPI.search.mockResolvedValue(result);
+
+    await expect(getSongs.getSongs('daft punk', 20, true, 'youtube')).resolves.toEqual([result, '']);
     expect(navidromeAPI.search).not.toHaveBeenCalled();
+    expect(youtubeAPI.search).toHaveBeenCalledWith('daft punk', true);
   });
 
   it('uses Navidrome search for free text when source is library', async () => {
@@ -214,7 +237,7 @@ describe('GetSongs Navidrome library routing', () => {
     const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
 
     await expect(getSongs.getSongs('neon lights', 20, true, 'library')).resolves.toEqual([result, '']);
-    expect(navidromeAPI.search).toHaveBeenCalledWith('neon lights');
+    expect(navidromeAPI.search).toHaveBeenCalledWith('neon lights', 20, {allowSongFallback: true});
     expect(youtubeAPI.search).not.toHaveBeenCalled();
     expect(dependencyMocks.ffprobe).not.toHaveBeenCalled();
   });
@@ -301,8 +324,10 @@ describe('NavidromeAPI URL helpers', () => {
 
   it.each([
     ['navidrome://song/song-id', {type: 'song', id: 'song-id'}],
+    ['navidrome://artist/artist-id', {type: 'artist', id: 'artist-id'}],
     ['navidrome://album/album-id', {type: 'album', id: 'album-id'}],
     ['navidrome://playlist/playlist-id', {type: 'playlist', id: 'playlist-id'}],
+    ['https://music.example:4533/app/#/artist/artist-id', {type: 'artist', id: 'artist-id'}],
     ['https://music.example:4533/app/#/album/album-id', {type: 'album', id: 'album-id'}],
     ['https://music.example:4533/app/#/playlist/playlist-id', {type: 'playlist', id: 'playlist-id'}],
     ['https://music.example:4533/app/#/song/song-id', {type: 'song', id: 'song-id'}],

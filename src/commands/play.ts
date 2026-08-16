@@ -49,7 +49,7 @@ export default class implements Command {
     if (navidromeAPI !== undefined) {
       slashCommand.addStringOption(option => option
         .setName('source')
-        .setDescription('where to search for free-text queries')
+        .setDescription('omit to try the library first; force YouTube or library')
         .addChoices(
           {name: 'YouTube', value: 'youtube'},
           {name: 'Library (Navidrome)', value: 'library'},
@@ -73,7 +73,7 @@ export default class implements Command {
 
   public async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const query = interaction.options.getString('query')!;
-    const source = (interaction.options.getString('source') ?? 'youtube') as PlaySource;
+    const source = (interaction.options.getString('source') ?? 'auto') as PlaySource;
 
     await this.addQueryToQueue.addToQueue({
       interaction,
@@ -142,6 +142,19 @@ export default class implements Command {
       } else {
         throw error;
       }
+    }
+
+    const {navidromeAPI} = this;
+    if (navidromeAPI !== undefined && interaction.options.getString('source') !== 'youtube') {
+      const librarySuggestions = await this.cache.wrap(
+        async () => navidromeAPI.suggest(query, 6),
+        {
+          expiresIn: ONE_HOUR_IN_SECONDS,
+          key: `autocomplete:library:${query}`,
+        },
+      );
+      const remaining = Math.max(0, 10 - librarySuggestions.length);
+      suggestions = [...librarySuggestions, ...suggestions.slice(0, remaining)];
     }
 
     await interaction.respond(suggestions);

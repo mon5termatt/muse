@@ -271,7 +271,7 @@ describe('command metadata', () => {
     expect(withoutLibrary.options?.some(option => option.name === 'source')).toBe(false);
     expect(withLibrary.options?.find(option => option.name === 'source')).toMatchObject({
       name: 'source',
-      description: 'where to search for free-text queries',
+      description: 'omit to try the library first; force YouTube or library',
     });
     expect(withLibrary.options?.find(option => option.name === 'query')?.description)
       .toBe('YouTube URL, Navidrome URL, or search query');
