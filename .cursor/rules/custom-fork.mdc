@@ -1,0 +1,12 @@
+---
+description: Fork identity and custom Navidrome source; no Deezer unless asked
+alwaysApply: true
+---
+
+# Custom Muse fork
+
+- `origin` is `mon5termatt/muse`. `upstream` is `museofficial/muse`.
+- Custom work is a first-class Navidrome/Subsonic `MediaSource` that streams from the local library.
+- Do not convert Navidrome tracks to YouTube. Do not treat library songs as `MediaSource.HLS` (that path is live radio: no duration, no seek).
+- YouTube stays the default `/play` search. Library search is opt-in via `/play source:library`.
+- Do not implement Deezer, deemix, or downloads into Navidrome unless explicitly asked.

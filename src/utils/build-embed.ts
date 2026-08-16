@@ -11,7 +11,7 @@ const getMaxSongTitleLength = (title: string) => {
   return nonASCII.test(title) ? 28 : 48;
 };
 
-const getSongTitle = ({title, url, offset, source}: QueuedSong, shouldTruncate = false) => {
+const getSongTitle = ({title, url, offset, source, pageUrl}: QueuedSong, shouldTruncate = false) => {
   if (source === MediaSource.HLS) {
     return `[${title}](${url})`;
   }
@@ -19,6 +19,11 @@ const getSongTitle = ({title, url, offset, source}: QueuedSong, shouldTruncate =
   const cleanSongTitle = title.replace(/\[.*\]/, '').trim();
 
   const songTitle = shouldTruncate ? truncate(cleanSongTitle, getMaxSongTitleLength(cleanSongTitle)) : cleanSongTitle;
+
+  if (source === MediaSource.Navidrome) {
+    return `[${songTitle}](${pageUrl ?? url})`;
+  }
+
   const youtubeId = url.length === 11 ? url : getYouTubeID(url) ?? '';
 
   return `[${songTitle}](https://www.youtube.com/watch?v=${youtubeId}${offset === 0 ? '' : '&t=' + String(offset)})`;

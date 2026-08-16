@@ -38,6 +38,8 @@ import {Setting} from '@prisma/client';
 export {DEFAULT_VOLUME, MediaSource, STATUS};
 export type {AgeRestrictedFallbackResolver, PlayerEvents, QueuedPlaylist, QueuedSong, SongMetadata};
 
+type NavidromeStreamResolver = (songId: string) => string;
+
 type PlayerPlaybackAttemptContext = PlaybackAttemptContext<QueuedSong, VoiceConnection>;
 
 export default class {
@@ -63,6 +65,7 @@ export default class {
   private positionInSeconds = 0;
   private readonly fileCache: FileCacheProvider;
   private readonly ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver;
+  private readonly navidromeStreamResolver?: NavidromeStreamResolver;
   private disconnectTimer: NodeJS.Timeout | null = null;
 
   private readonly channelToSpeakingUsers: Map<string, Set<string>> = new Map();
@@ -71,10 +74,11 @@ export default class {
   private voiceActivitySessionGeneration = 0;
   private hasRegisteredVoiceActivityListener = false;
 
-  constructor(fileCache: FileCacheProvider, guildId: string, ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver) {
+  constructor(fileCache: FileCacheProvider, guildId: string, ageRestrictedFallbackResolver?: AgeRestrictedFallbackResolver, navidromeStreamResolver?: NavidromeStreamResolver) {
     this.fileCache = fileCache;
     this.guildId = guildId;
     this.ageRestrictedFallbackResolver = ageRestrictedFallbackResolver;
+    this.navidromeStreamResolver = navidromeStreamResolver;
     this.playbackAttempts = new PlaybackAttemptTracker(() => ({
       currentSong: this.getCurrent(),
       queueEntryVersion: this.getCurrentQueueEntryId(),
@@ -655,26 +659,48 @@ export default class {
     ffmpegInput = await this.fileCache.getPathFor(this.getHashForCache(song.url));
 
     if (!ffmpegInput) {
-      const mediaSource = await getYouTubeMediaSource(song.url);
-      ffmpegInput = mediaSource.url;
+      if (song.source === MediaSource.Navidrome) {
+        if (!this.navidromeStreamResolver) {
+          throw new Error('Navidrome is not enabled!');
+        }
 
-      // Don't cache livestreams or long videos
-      const MAX_CACHE_LENGTH_SECONDS = 30 * 60; // 30 minutes
-      shouldCacheVideo = !mediaSource.isLive && song.length < MAX_CACHE_LENGTH_SECONDS && !options.seek;
+        ffmpegInput = this.navidromeStreamResolver(song.url);
 
-      debug(shouldCacheVideo ? 'Caching video' : 'Not caching video');
+        const MAX_CACHE_LENGTH_SECONDS = 30 * 60;
+        shouldCacheVideo = song.length < MAX_CACHE_LENGTH_SECONDS && !options.seek;
 
-      ffmpegInputOptions.push(...[
-        '-reconnect',
-        '1',
-        '-reconnect_streamed',
-        '1',
-        '-reconnect_delay_max',
-        '5',
-      ]);
+        debug(shouldCacheVideo ? 'Caching video' : 'Not caching video');
 
-      const headerOptions = this.buildFfmpegHeaderOptions(mediaSource.headers);
-      ffmpegInputOptions.push(...headerOptions);
+        ffmpegInputOptions.push(...[
+          '-reconnect',
+          '1',
+          '-reconnect_streamed',
+          '1',
+          '-reconnect_delay_max',
+          '5',
+        ]);
+      } else {
+        const mediaSource = await getYouTubeMediaSource(song.url);
+        ffmpegInput = mediaSource.url;
+
+        // Don't cache livestreams or long videos
+        const MAX_CACHE_LENGTH_SECONDS = 30 * 60; // 30 minutes
+        shouldCacheVideo = !mediaSource.isLive && song.length < MAX_CACHE_LENGTH_SECONDS && !options.seek;
+
+        debug(shouldCacheVideo ? 'Caching video' : 'Not caching video');
+
+        ffmpegInputOptions.push(...[
+          '-reconnect',
+          '1',
+          '-reconnect_streamed',
+          '1',
+          '-reconnect_delay_max',
+          '5',
+        ]);
+
+        const headerOptions = this.buildFfmpegHeaderOptions(mediaSource.headers);
+        ffmpegInputOptions.push(...headerOptions);
+      }
     }
 
     if (options.seek) {

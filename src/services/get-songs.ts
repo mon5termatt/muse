@@ -5,19 +5,33 @@ import {TYPES} from '../types.js';
 import ffmpeg from 'fluent-ffmpeg';
 import YoutubeAPI from './youtube-api.js';
 import SpotifyAPI, {SpotifyTrack} from './spotify-api.js';
+import NavidromeAPI from './navidrome-api.js';
 import {URL} from 'node:url';
+
+export type PlaySource = 'youtube' | 'library';
 
 @injectable()
 export default class {
   private readonly youtubeAPI: YoutubeAPI;
   private readonly spotifyAPI?: SpotifyAPI;
+  private readonly navidromeAPI?: NavidromeAPI;
 
-  constructor(@inject(TYPES.Services.YoutubeAPI) youtubeAPI: YoutubeAPI, @inject(TYPES.Services.SpotifyAPI) @optional() spotifyAPI?: SpotifyAPI) {
+  constructor(
+    @inject(TYPES.Services.YoutubeAPI) youtubeAPI: YoutubeAPI,
+    @inject(TYPES.Services.SpotifyAPI) @optional() spotifyAPI?: SpotifyAPI,
+    @inject(TYPES.Services.NavidromeAPI) @optional() navidromeAPI?: NavidromeAPI,
+  ) {
     this.youtubeAPI = youtubeAPI;
     this.spotifyAPI = spotifyAPI;
+    this.navidromeAPI = navidromeAPI;
   }
 
-  async getSongs(query: string, playlistLimit: number, shouldSplitChapters: boolean): Promise<[SongMetadata[], string]> {
+  async getSongs(
+    query: string,
+    playlistLimit: number,
+    shouldSplitChapters: boolean,
+    source: PlaySource = 'youtube',
+  ): Promise<[SongMetadata[], string]> {
     const newSongs: SongMetadata[] = [];
     let extraMsg = '';
     let url: URL | undefined;
@@ -29,19 +43,10 @@ export default class {
       url = undefined;
     }
 
-    const supportedProtocols = ['http:', 'https:', 'spotify:'];
+    const supportedProtocols = ['http:', 'https:', 'spotify:', 'navidrome:'];
 
     if (!url || !supportedProtocols.includes(url.protocol)) {
-      // Not a supported provider URL, so search YouTube as free text.
-      const songs = await this.youtubeVideoSearch(query, shouldSplitChapters);
-
-      if (songs) {
-        newSongs.push(...songs);
-      } else {
-        throw new Error('that doesn\'t exist');
-      }
-
-      return [newSongs, extraMsg];
+      return this.fromFreeText(query, shouldSplitChapters, source);
     }
 
     const YOUTUBE_HOSTS = [
@@ -91,6 +96,8 @@ export default class {
       }
 
       newSongs.push(...convertedSongs);
+    } else if (url.protocol === 'navidrome:' || this.navidromeAPI?.matchesUrl(url)) {
+      newSongs.push(...await this.fromNavidromeUrl(url, playlistLimit));
     } else {
       const song = await this.httpLiveStream(query);
 
@@ -102,6 +109,44 @@ export default class {
     }
 
     return [newSongs, extraMsg];
+  }
+
+  private async fromFreeText(query: string, shouldSplitChapters: boolean, source: PlaySource): Promise<[SongMetadata[], string]> {
+    if (source === 'library') {
+      if (this.navidromeAPI === undefined) {
+        throw new Error('Navidrome is not enabled!');
+      }
+
+      const songs = await this.navidromeAPI.search(query);
+
+      if (songs.length === 0) {
+        throw new Error('that doesn\'t exist');
+      }
+
+      return [songs, ''];
+    }
+
+    const songs = await this.youtubeVideoSearch(query, shouldSplitChapters);
+
+    if (songs) {
+      return [songs, ''];
+    }
+
+    throw new Error('that doesn\'t exist');
+  }
+
+  private async fromNavidromeUrl(url: URL, playlistLimit: number): Promise<SongMetadata[]> {
+    if (this.navidromeAPI === undefined) {
+      throw new Error('Navidrome is not enabled!');
+    }
+
+    const songs = await this.navidromeAPI.resolveUrl(url, playlistLimit);
+
+    if (songs.length === 0) {
+      throw new Error('that doesn\'t exist');
+    }
+
+    return songs;
   }
 
   private async youtubeVideoSearch(query: string, shouldSplitChapters: boolean): Promise<SongMetadata[]> {

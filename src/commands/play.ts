@@ -10,6 +10,8 @@ import getYouTubeAndSpotifySuggestionsFor, {SpotifySuggestionsUnavailableError} 
 import KeyValueCacheProvider from '../services/key-value-cache.js';
 import {ONE_HOUR_IN_SECONDS} from '../utils/constants.js';
 import AddQueryToQueue from '../services/add-query-to-queue.js';
+import NavidromeAPI from '../services/navidrome-api.js';
+import {PlaySource} from '../services/get-songs.js';
 
 @injectable()
 export default class implements Command {
@@ -20,24 +22,41 @@ export default class implements Command {
   private readonly spotify?: Spotify;
   private readonly cache: KeyValueCacheProvider;
   private readonly addQueryToQueue: AddQueryToQueue;
+  private readonly navidromeAPI?: NavidromeAPI;
 
-  constructor(@inject(TYPES.ThirdParty) @optional() thirdParty: ThirdParty, @inject(TYPES.KeyValueCache) cache: KeyValueCacheProvider, @inject(TYPES.Services.AddQueryToQueue) addQueryToQueue: AddQueryToQueue) {
+  constructor(
+    @inject(TYPES.ThirdParty) @optional() thirdParty: ThirdParty,
+    @inject(TYPES.KeyValueCache) cache: KeyValueCacheProvider,
+    @inject(TYPES.Services.AddQueryToQueue) addQueryToQueue: AddQueryToQueue,
+    @inject(TYPES.Services.NavidromeAPI) @optional() navidromeAPI?: NavidromeAPI,
+  ) {
     this.spotify = thirdParty?.spotify;
     this.cache = cache;
     this.addQueryToQueue = addQueryToQueue;
+    this.navidromeAPI = navidromeAPI;
 
-    const queryDescription = thirdParty === undefined
-      ? 'YouTube URL or search query'
-      : 'YouTube URL, Spotify URL, or search query';
+    const queryDescription = this.buildQueryDescription(thirdParty !== undefined, navidromeAPI !== undefined);
 
-    this.slashCommand = new SlashCommandBuilder()
+    const slashCommand = new SlashCommandBuilder()
       .setName('play')
       .setDescription('play a song')
       .addStringOption(option => option
         .setName('query')
         .setDescription(queryDescription)
         .setAutocomplete(true)
-        .setRequired(true))
+        .setRequired(true));
+
+    if (navidromeAPI !== undefined) {
+      slashCommand.addStringOption(option => option
+        .setName('source')
+        .setDescription('where to search for free-text queries')
+        .addChoices(
+          {name: 'YouTube', value: 'youtube'},
+          {name: 'Library (Navidrome)', value: 'library'},
+        ));
+    }
+
+    this.slashCommand = slashCommand
       .addBooleanOption(option => option
         .setName('immediate')
         .setDescription('add track to the front of the queue'))
@@ -54,6 +73,7 @@ export default class implements Command {
 
   public async execute(interaction: ChatInputCommandInteraction): Promise<void> {
     const query = interaction.options.getString('query')!;
+    const source = (interaction.options.getString('source') ?? 'youtube') as PlaySource;
 
     await this.addQueryToQueue.addToQueue({
       interaction,
@@ -62,6 +82,7 @@ export default class implements Command {
       shuffleAdditions: interaction.options.getBoolean('shuffle') ?? false,
       shouldSplitChapters: interaction.options.getBoolean('split') ?? false,
       skipCurrentTrack: interaction.options.getBoolean('skip') ?? false,
+      source,
     });
   }
 
@@ -79,8 +100,27 @@ export default class implements Command {
     } catch {}
 
     // Don't return suggestions for supported provider URLs
-    if (queryProtocol && ['http:', 'https:', 'spotify:'].includes(queryProtocol)) {
+    if (queryProtocol && ['http:', 'https:', 'spotify:', 'navidrome:'].includes(queryProtocol)) {
       await interaction.respond([]);
+      return;
+    }
+
+    if (interaction.options.getString('source') === 'library') {
+      const {navidromeAPI} = this;
+      if (navidromeAPI === undefined) {
+        await interaction.respond([]);
+        return;
+      }
+
+      const suggestions = await this.cache.wrap(
+        async () => navidromeAPI.suggest(query, 10),
+        {
+          expiresIn: ONE_HOUR_IN_SECONDS,
+          key: `autocomplete:library:${query}`,
+        },
+      );
+
+      await interaction.respond(suggestions);
       return;
     }
 
@@ -105,5 +145,23 @@ export default class implements Command {
     }
 
     await interaction.respond(suggestions);
+  }
+
+  private buildQueryDescription(spotifyEnabled: boolean, navidromeEnabled: boolean): string {
+    const sources = ['YouTube URL'];
+
+    if (spotifyEnabled) {
+      sources.push('Spotify URL');
+    }
+
+    if (navidromeEnabled) {
+      sources.push('Navidrome URL');
+    }
+
+    if (sources.length === 1) {
+      return `${sources[0]} or search query`;
+    }
+
+    return `${sources.join(', ')}, or search query`;
   }
 }

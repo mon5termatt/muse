@@ -27,7 +27,7 @@ vi.mock('../src/utils/db.js', () => ({
 vi.mock('../src/services/player.js', () => ({
   default: class {},
   STATUS: {PLAYING: 0, PAUSED: 1, IDLE: 2},
-  MediaSource: {Youtube: 0, HLS: 1},
+  MediaSource: {Youtube: 0, HLS: 1, Navidrome: 2},
   DEFAULT_VOLUME: 100,
 }));
 
@@ -262,6 +262,19 @@ describe('command metadata', () => {
     expect(findOption(serialized.get('config')!, 'set-reduce-vol-when-voice-target', 'volume')).toMatchObject({min_value: 0, max_value: 100});
     expect(findOption(serialized.get('config')!, 'set-default-volume', 'level')).toMatchObject({min_value: 0, max_value: 100});
     expect(findOption(serialized.get('config')!, 'set-default-queue-page-size', 'page-size')).toMatchObject({min_value: 1, max_value: 30});
+  });
+
+  it('advertises /play source only when Navidrome is enabled', () => {
+    const withoutLibrary = new Play(undefined as never, {} as never, {} as never).slashCommand.toJSON();
+    const withLibrary = new Play(undefined as never, {} as never, {} as never, {} as never).slashCommand.toJSON();
+
+    expect(withoutLibrary.options?.some(option => option.name === 'source')).toBe(false);
+    expect(withLibrary.options?.find(option => option.name === 'source')).toMatchObject({
+      name: 'source',
+      description: 'where to search for free-text queries',
+    });
+    expect(withLibrary.options?.find(option => option.name === 'query')?.description)
+      .toBe('YouTube URL, Navidrome URL, or search query');
   });
 
   it('limits /config to members with Manage Guild by default', () => {

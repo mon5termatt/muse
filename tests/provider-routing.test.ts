@@ -17,11 +17,12 @@ vi.mock('array-shuffle', () => ({
 }));
 
 vi.mock('../src/services/player.js', () => ({
-  MediaSource: {Youtube: 0, HLS: 1},
+  MediaSource: {Youtube: 0, HLS: 1, Navidrome: 2},
 }));
 
 import GetSongs from '../src/services/get-songs.js';
 import SpotifyAPI from '../src/services/spotify-api.js';
+import NavidromeAPI from '../src/services/navidrome-api.js';
 
 const makeSong = (title: string, url = title.toLowerCase().replaceAll(' ', '-')) => ({
   title,
@@ -35,7 +36,13 @@ const makeSong = (title: string, url = title.toLowerCase().replaceAll(' ', '-'))
   source: 0,
 });
 
-const makeGetSongsHarness = () => {
+const makeNavidromeAPI = () => ({
+  matchesUrl: vi.fn().mockReturnValue(false),
+  search: vi.fn().mockResolvedValue([]),
+  resolveUrl: vi.fn().mockResolvedValue([]),
+});
+
+const makeGetSongsHarness = (navidromeAPI?: ReturnType<typeof makeNavidromeAPI>) => {
   const youtubeAPI = {
     search: vi.fn().mockResolvedValue([]),
     getVideo: vi.fn().mockResolvedValue([]),
@@ -49,7 +56,8 @@ const makeGetSongsHarness = () => {
   };
 
   return {
-    getSongs: new GetSongs(youtubeAPI as never, spotifyAPI as never),
+    getSongs: new GetSongs(youtubeAPI as never, spotifyAPI as never, navidromeAPI as never),
+    navidromeAPI,
     spotifyAPI,
     youtubeAPI,
   };
@@ -184,6 +192,134 @@ describe('GetSongs collection limits and conversion accounting', () => {
 
     await expect(getSongs.getSongs('spotify:track:missing-id', 20, false))
       .resolves.toEqual([[], '1 song was not found']);
+  });
+});
+
+describe('GetSongs Navidrome library routing', () => {
+  it('keeps YouTube as the default free-text search when Navidrome is enabled', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+    const result = [makeSong('Search result')];
+    youtubeAPI.search.mockResolvedValue(result);
+
+    await expect(getSongs.getSongs('lofi beats', 20, true)).resolves.toEqual([result, '']);
+    expect(youtubeAPI.search).toHaveBeenCalledWith('lofi beats', true);
+    expect(navidromeAPI.search).not.toHaveBeenCalled();
+  });
+
+  it('uses Navidrome search for free text when source is library', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    const result = [makeSong('Library result', 'song-id')];
+    navidromeAPI.search.mockResolvedValue(result);
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+
+    await expect(getSongs.getSongs('neon lights', 20, true, 'library')).resolves.toEqual([result, '']);
+    expect(navidromeAPI.search).toHaveBeenCalledWith('neon lights');
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+    expect(dependencyMocks.ffprobe).not.toHaveBeenCalled();
+  });
+
+  it('throws when source is library but Navidrome is not enabled', async () => {
+    const {getSongs, youtubeAPI} = makeGetSongsHarness();
+
+    await expect(getSongs.getSongs('neon lights', 20, false, 'library'))
+      .rejects.toThrow('Navidrome is not enabled!');
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+  });
+
+  it('throws when a library search returns no songs', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    navidromeAPI.search.mockResolvedValue([]);
+    const {getSongs} = makeGetSongsHarness(navidromeAPI);
+
+    await expect(getSongs.getSongs('missing track', 20, false, 'library'))
+      .rejects.toThrow('that doesn\'t exist');
+  });
+
+  it('routes a navidrome:// URL to Navidrome even without source:library', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    const result = [makeSong('Library song', 'song-id')];
+    navidromeAPI.resolveUrl.mockResolvedValue(result);
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+    const url = 'navidrome://song/song-id';
+
+    await expect(getSongs.getSongs(url, 20, false)).resolves.toEqual([result, '']);
+    expect(navidromeAPI.resolveUrl).toHaveBeenCalledWith(expect.any(URL), 20);
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+    expect(dependencyMocks.ffprobe).not.toHaveBeenCalled();
+  });
+
+  it('routes a configured Navidrome host URL instead of HLS', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    navidromeAPI.matchesUrl.mockImplementation((url: URL) => url.host === 'music.example:4533');
+    const result = [makeSong('Album track', 'song-id')];
+    navidromeAPI.resolveUrl.mockResolvedValue(result);
+    const {getSongs, youtubeAPI} = makeGetSongsHarness(navidromeAPI);
+    const url = 'https://music.example:4533/app/#/album/album-id';
+
+    await expect(getSongs.getSongs(url, 20, false)).resolves.toEqual([result, '']);
+    expect(navidromeAPI.matchesUrl).toHaveBeenCalled();
+    expect(navidromeAPI.resolveUrl).toHaveBeenCalledWith(expect.any(URL), 20);
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+    expect(dependencyMocks.ffprobe).not.toHaveBeenCalled();
+  });
+
+  it('still uses ffprobe for non-Navidrome HTTP URLs when Navidrome is enabled', async () => {
+    const navidromeAPI = makeNavidromeAPI();
+    const {getSongs} = makeGetSongsHarness(navidromeAPI);
+    const url = 'https://radio.example/live.m3u8';
+
+    const [songs] = await getSongs.getSongs(url, 20, false);
+
+    expect(songs).toEqual([expect.objectContaining({url, isLive: true})]);
+    expect(navidromeAPI.resolveUrl).not.toHaveBeenCalled();
+    expect(dependencyMocks.ffprobe).toHaveBeenCalledWith(url, expect.any(Function));
+  });
+
+  it('throws when a navidrome:// URL is used but Navidrome is not enabled', async () => {
+    const {getSongs, youtubeAPI} = makeGetSongsHarness();
+
+    await expect(getSongs.getSongs('navidrome://song/song-id', 20, false))
+      .rejects.toThrow('Navidrome is not enabled!');
+    expect(youtubeAPI.search).not.toHaveBeenCalled();
+    expect(dependencyMocks.ffprobe).not.toHaveBeenCalled();
+  });
+});
+
+describe('NavidromeAPI URL helpers', () => {
+  const api = new NavidromeAPI({
+    NAVIDROME_URL: 'https://music.example:4533/',
+    NAVIDROME_USER: 'listener',
+    NAVIDROME_PASSWORD: 'secret',
+  } as never);
+
+  it('matches the configured host and the navidrome: protocol', () => {
+    expect(api.matchesUrl(new URL('https://music.example:4533/app/#/album/abc'))).toBe(true);
+    expect(api.matchesUrl(new URL('navidrome://song/abc'))).toBe(true);
+    expect(api.matchesUrl(new URL('https://radio.example/live.m3u8'))).toBe(false);
+  });
+
+  it.each([
+    ['navidrome://song/song-id', {type: 'song', id: 'song-id'}],
+    ['navidrome://album/album-id', {type: 'album', id: 'album-id'}],
+    ['navidrome://playlist/playlist-id', {type: 'playlist', id: 'playlist-id'}],
+    ['https://music.example:4533/app/#/album/album-id', {type: 'album', id: 'album-id'}],
+    ['https://music.example:4533/app/#/playlist/playlist-id', {type: 'playlist', id: 'playlist-id'}],
+    ['https://music.example:4533/app/#/song/song-id', {type: 'song', id: 'song-id'}],
+  ])('parses %s', (input, expected) => {
+    expect(api.parseResource(input)).toEqual(expected);
+  });
+
+  it('builds a Subsonic stream URL for play-time resolution', () => {
+    const streamUrl = new URL(api.getStreamUrl('song-id'));
+
+    expect(streamUrl.origin + streamUrl.pathname).toBe('https://music.example:4533/rest/stream.view');
+    expect(streamUrl.searchParams.get('id')).toBe('song-id');
+    expect(streamUrl.searchParams.get('u')).toBe('listener');
+    expect(streamUrl.searchParams.get('c')).toBe('muse');
+    expect(streamUrl.searchParams.get('f')).toBe('json');
+    expect(streamUrl.searchParams.get('t')).toBeTruthy();
+    expect(streamUrl.searchParams.get('s')).toBeTruthy();
   });
 });
 

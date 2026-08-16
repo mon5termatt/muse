@@ -1,0 +1,19 @@
+---
+description: Windows workstation; Docker only over SSH to the Muse LXC
+alwaysApply: true
+---
+
+# Windows host, Docker on LXC
+
+This machine is Windows. Do not run `docker`, `docker compose`, or image builds locally.
+
+When containers are needed, SSH to the Muse LXC. Create that LXC only when the user asks. Until a real hostname exists, use the placeholder `muse-lxc`:
+
+```bash
+ssh muse-lxc -- docker ps
+ssh muse-lxc -- docker compose -f /path/to/compose.yml up -d
+```
+
+Local work is `yarn` / `npm` (`lint`, `test`, `typecheck`, `yarn dev`). Docker is for the deployed bot on the LXC, which is how the bot reaches Navidrome on the LAN.
+
+Do not assume Docker Desktop, WSL Docker, or a reachable LXC until the user says it exists.

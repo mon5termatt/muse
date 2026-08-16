@@ -2,7 +2,7 @@ import {ChatInputCommandInteraction, GuildMember} from 'discord.js';
 import {inject, injectable} from 'inversify';
 import shuffle from 'array-shuffle';
 import {TYPES} from '../types.js';
-import GetSongs from '../services/get-songs.js';
+import GetSongs, {PlaySource} from '../services/get-songs.js';
 import {MediaSource, SongMetadata, STATUS} from './player.js';
 import PlayerManager from '../managers/player.js';
 import {buildPlayingMessageEmbed} from '../utils/build-embed.js';
@@ -42,6 +42,7 @@ export default class AddQueryToQueue {
     shouldSplitChapters,
     skipCurrentTrack,
     interaction,
+    source = 'youtube',
   }: {
     query: string;
     addToFrontOfQueue: boolean;
@@ -49,6 +50,7 @@ export default class AddQueryToQueue {
     shouldSplitChapters: boolean;
     skipCurrentTrack: boolean;
     interaction: ChatInputCommandInteraction;
+    source?: PlaySource;
   }): Promise<void> {
     const guildId = interaction.guild!.id;
     const player = this.playerManager.get(guildId);
@@ -63,7 +65,7 @@ export default class AddQueryToQueue {
 
     await interaction.deferReply({ephemeral: queueAddResponseEphemeral});
 
-    let [newSongs, extraMsg] = await this.getSongs.getSongs(query, playlistLimit, shouldSplitChapters);
+    let [newSongs, extraMsg] = await this.getSongs.getSongs(query, playlistLimit, shouldSplitChapters, source);
 
     if (newSongs.length === 0) {
       throw new Error('no songs found');

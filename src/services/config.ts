@@ -18,6 +18,9 @@ const CONFIG_MAP = {
   YOUTUBE_API_KEY: firstNonEmpty(process.env.YOUTUBE_API_KEY),
   SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID ?? '',
   SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET ?? '',
+  NAVIDROME_URL: process.env.NAVIDROME_URL ?? '',
+  NAVIDROME_USER: process.env.NAVIDROME_USER ?? '',
+  NAVIDROME_PASSWORD: process.env.NAVIDROME_PASSWORD ?? '',
   REGISTER_COMMANDS_ON_BOT: process.env.REGISTER_COMMANDS_ON_BOT === 'true',
   DATA_DIR,
   CACHE_DIR: path.join(DATA_DIR, 'cache'),
@@ -45,6 +48,9 @@ export default class Config {
   readonly YOUTUBE_API_KEY!: string;
   readonly SPOTIFY_CLIENT_ID!: string;
   readonly SPOTIFY_CLIENT_SECRET!: string;
+  readonly NAVIDROME_URL!: string;
+  readonly NAVIDROME_USER!: string;
+  readonly NAVIDROME_PASSWORD!: string;
   readonly REGISTER_COMMANDS_ON_BOT!: boolean;
   readonly DATA_DIR!: string;
   readonly CACHE_DIR!: string;

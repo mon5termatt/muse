@@ -85,6 +85,9 @@ const GUILD_ID = 'guild-id';
 const ORIGINAL_ENV = {
   DISCORD_TOKEN: process.env.DISCORD_TOKEN,
   MUSE_BUNDLED_YT_DLP_PATH: process.env.MUSE_BUNDLED_YT_DLP_PATH,
+  NAVIDROME_PASSWORD: process.env.NAVIDROME_PASSWORD,
+  NAVIDROME_URL: process.env.NAVIDROME_URL,
+  NAVIDROME_USER: process.env.NAVIDROME_USER,
   PATH: process.env.PATH,
   SPOTIFY_CLIENT_ID: process.env.SPOTIFY_CLIENT_ID,
   SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET,
@@ -144,8 +147,8 @@ const makeFfmpegCommand = () => {
 const makeExecutableLayout = async (includePython = true) => {
   const root = await fs.mkdtemp(path.join(tmpdir(), 'muse-ops-yt-dlp-'));
   const bin = path.join(root, 'bin');
-  const executable = path.join(bin, 'yt-dlp');
-  const python = path.join(bin, 'python');
+  const executable = path.join(bin, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+  const python = path.join(bin, process.platform === 'win32' ? 'python.exe' : 'python');
   await fs.mkdir(bin);
   await fs.writeFile(executable, '#!/bin/sh\n', {mode: 0o755});
   if (includePython) {
@@ -161,6 +164,9 @@ const loadSpotifyBindingHarness = async (clientId: string, clientSecret: string)
   process.env.YOUTUBE_API_KEY = 'synthetic-youtube-key';
   process.env.SPOTIFY_CLIENT_ID = clientId;
   process.env.SPOTIFY_CLIENT_SECRET = clientSecret;
+  process.env.NAVIDROME_URL = '';
+  process.env.NAVIDROME_USER = '';
+  process.env.NAVIDROME_PASSWORD = '';
   vi.doMock('discord.js', async () => {
     const actual = await vi.importActual<typeof import('discord.js')>('discord.js');
 

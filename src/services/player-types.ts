@@ -3,6 +3,7 @@ import type {Snowflake} from 'discord.js';
 export enum MediaSource {
   Youtube,
   HLS,
+  Navidrome,
 }
 
 export interface QueuedPlaylist {
@@ -19,6 +20,7 @@ export interface SongMetadata {
   playlist: QueuedPlaylist | null;
   isLive: boolean;
   thumbnailUrl: string | null;
+  pageUrl?: string | null;
   source: MediaSource;
 }
 

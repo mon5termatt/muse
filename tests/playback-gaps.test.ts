@@ -238,6 +238,7 @@ describe('PLAY-06 autocomplete preservation', () => {
     ['   ', 'whitespace input'],
     ['https://www.youtube.com/watch?v=abcdefghijk', 'HTTP URL'],
     ['spotify:track:track-id', 'Spotify URL'],
+    ['navidrome://song/song-id', 'Navidrome URL'],
   ])('returns no suggestions for %s (%s)', async query => {
     const {cache, command, interaction} = makeAutocompleteHarness(query);
 
@@ -475,8 +476,10 @@ describe('PLAY-13 private cookie-copy preservation', () => {
         fs.readFile(temporaryCookiesPath, 'utf8'),
       ]);
       expect(temporaryCookiesPath).not.toBe(sourcePath);
-      expect(directoryStats.mode & 0o777).toBe(0o700);
-      expect(fileStats.mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') {
+        expect(directoryStats.mode & 0o777).toBe(0o700);
+        expect(fileStats.mode & 0o777).toBe(0o600);
+      }
       expect(contents).toBe('private-cookie-bytes');
       return {stdout: VALID_MEDIA_RESPONSE};
     });
