@@ -135,6 +135,7 @@ const makeFfmpegCommand = () => {
     noVideo: vi.fn(() => command),
     on: vi.fn(() => command),
     outputFormat: vi.fn(() => command),
+    outputOptions: vi.fn(() => command),
     pipe: vi.fn((destination: {end(): void}) => {
       destination.end();
       return destination;
@@ -459,6 +460,82 @@ describe('OPS-11 yt-dlp extraction and ffmpeg handoff', () => {
     expect(command.noVideo).toHaveBeenCalledOnce();
     expect(command.audioCodec).toHaveBeenCalledWith('libopus');
     expect(command.outputFormat).toHaveBeenCalledWith('webm');
+    expect(command.outputOptions).not.toHaveBeenCalled();
+
+    stream.destroy();
+    await flushAsyncWork();
+  });
+
+  it('applies clip stop time as an ffmpeg output option so HTTP YouTube sources stay playable', async () => {
+    process.env.YT_DLP_PATH = '/fake/yt-dlp';
+    const fileCache = {
+      getPathFor: vi.fn().mockResolvedValue(null),
+    };
+    const player = new Player(fileCache as never, GUILD_ID);
+    const song: QueuedSong = {
+      title: 'Long uncached track',
+      artist: 'Artist',
+      url: 'abcdefghijk',
+      length: 3_600,
+      offset: 0,
+      playlist: null,
+      isLive: false,
+      thumbnailUrl: null,
+      source: MediaSource.Youtube,
+      addedInChannelId: 'text-channel-id',
+      requestedBy: 'requester-id',
+    };
+
+    const stream = await (player as unknown as {
+      getStream(input: QueuedSong, options?: {seek?: number; to?: number}): Promise<Readable>;
+    }).getStream(song, {seek: 0, to: 3_600});
+    const command = dependencyMocks.ffmpeg.mock.results[0].value as ReturnType<typeof makeFfmpegCommand>;
+
+    expect(command.inputOptions).toHaveBeenCalledWith([
+      '-reconnect',
+      '1',
+      '-reconnect_streamed',
+      '1',
+      '-reconnect_delay_max',
+      '5',
+      '-headers',
+      'Authorization: Bearer media-token\r\nUser-Agent: Muse ops test\r\n',
+    ]);
+    expect(command.outputOptions).toHaveBeenCalledWith(['-to', '3600']);
+
+    stream.destroy();
+    await flushAsyncWork();
+  });
+
+  it('keeps input -ss for chapter seeks and uses output -to for the remaining clip duration', async () => {
+    process.env.YT_DLP_PATH = '/fake/yt-dlp';
+    const fileCache = {
+      getPathFor: vi.fn().mockResolvedValue(null),
+    };
+    const player = new Player(fileCache as never, GUILD_ID);
+    const song: QueuedSong = {
+      title: 'Chapter two',
+      artist: 'Artist',
+      url: 'abcdefghijk',
+      length: 40,
+      offset: 30,
+      playlist: null,
+      isLive: false,
+      thumbnailUrl: null,
+      source: MediaSource.Youtube,
+      addedInChannelId: 'text-channel-id',
+      requestedBy: 'requester-id',
+    };
+
+    const stream = await (player as unknown as {
+      getStream(input: QueuedSong, options?: {seek?: number; to?: number}): Promise<Readable>;
+    }).getStream(song, {seek: 30, to: 70});
+    const command = dependencyMocks.ffmpeg.mock.results[0].value as ReturnType<typeof makeFfmpegCommand>;
+    const inputOptions = command.inputOptions.mock.calls[0][0] as string[];
+
+    expect(inputOptions).toEqual(expect.arrayContaining(['-ss', '30']));
+    expect(inputOptions).not.toContain('-to');
+    expect(command.outputOptions).toHaveBeenCalledWith(['-to', '40']);
 
     stream.destroy();
     await flushAsyncWork();

@@ -703,18 +703,24 @@ export default class {
       }
     }
 
-    if (options.seek) {
-      ffmpegInputOptions.push('-ss', options.seek.toString());
+    const seekSeconds = options.seek && options.seek > 0 ? options.seek : 0;
+    if (seekSeconds > 0) {
+      ffmpegInputOptions.push('-ss', seekSeconds.toString());
     }
 
-    if (options.to) {
-      ffmpegInputOptions.push('-to', options.to.toString());
+    // `-to` as an input option needs a seekable source. YouTube HTTP URLs are not,
+    // so long uncached tracks with `-to <duration>` exit immediately. Apply the stop
+    // time on the output instead (duration after any input `-ss`).
+    const ffmpegOutputOptions: string[] = [];
+    if (options.to !== undefined && options.to > seekSeconds) {
+      ffmpegOutputOptions.push('-to', (options.to - seekSeconds).toString());
     }
 
     return this.createReadStream({
       url: ffmpegInput,
       cacheKey: song.url,
       ffmpegInputOptions,
+      ffmpegOutputOptions,
       cache: shouldCacheVideo,
     });
   }
@@ -936,7 +942,7 @@ export default class {
     return ['-headers', `${headerLines}\r\n`];
   }
 
-  private async createReadStream(options: {url: string; cacheKey: string; ffmpegInputOptions?: string[]; cache?: boolean}): Promise<Readable> {
+  private async createReadStream(options: {url: string; cacheKey: string; ffmpegInputOptions?: string[]; ffmpegOutputOptions?: string[]; cache?: boolean}): Promise<Readable> {
     return new Promise((resolve, reject) => {
       const capacitor = new WriteStream();
 
@@ -948,18 +954,30 @@ export default class {
       const returnedStream = capacitor.createReadStream();
       let hasReturnedStreamClosed = false;
 
-      const stream = ffmpeg(options.url)
-        .inputOptions(options?.ffmpegInputOptions ?? ['-re'])
+      let command = ffmpeg(options.url)
+        .inputOptions(options?.ffmpegInputOptions ?? ['-re']);
+
+      if (options.ffmpegOutputOptions && options.ffmpegOutputOptions.length > 0) {
+        command = command.outputOptions(options.ffmpegOutputOptions);
+      }
+
+      const stream = command
         .noVideo()
         .audioCodec('libopus')
         .outputFormat('webm')
         .on('error', error => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`ffmpeg failed for guild ${this.guildId}: ${message}`);
+          if (!returnedStream.destroyed) {
+            returnedStream.destroy();
+          }
+
           if (!hasReturnedStreamClosed) {
-            reject(error);
+            reject(error instanceof Error ? error : new Error(message));
           }
         })
-        .on('start', command => {
-          debug(`Spawned ffmpeg with ${command}`);
+        .on('start', ffmpegCommand => {
+          debug(`Spawned ffmpeg with ${ffmpegCommand}`);
         });
 
       stream.pipe(capacitor);
