@@ -15,6 +15,7 @@ const CONFIG_ENV_KEYS = [
   'ENV_FILE',
   'MUSE_BUNDLED_YT_DLP_PATH',
   'REGISTER_COMMANDS_ON_BOT',
+  'AUTOCOMPLETE_SLOTS',
   'SPONSORBLOCK_TIMEOUT',
   'SPOTIFY_CLIENT_ID',
   'SPOTIFY_CLIENT_SECRET',
@@ -175,6 +176,35 @@ describe('OPS-01 environment and config loading', () => {
       YOUTUBE_API_KEY: 'youtube-secret',
     });
     expect(() => new invalidModule.default()).toThrow('Invalid numeric value for SPONSORBLOCK_TIMEOUT');
+  });
+
+  it('defaults autocomplete slots to Discord\'s 25-choice cap and clamps higher values', async () => {
+    const {default: Config} = await loadConfig({
+      DISCORD_TOKEN: 'discord-secret',
+      YOUTUBE_API_KEY: 'youtube-secret',
+    });
+    expect(new Config().AUTOCOMPLETE_SLOTS).toBe(25);
+
+    const customModule = await loadConfig({
+      AUTOCOMPLETE_SLOTS: '10',
+      DISCORD_TOKEN: 'discord-secret',
+      YOUTUBE_API_KEY: 'youtube-secret',
+    });
+    expect(new customModule.default().AUTOCOMPLETE_SLOTS).toBe(10);
+
+    const clampedModule = await loadConfig({
+      AUTOCOMPLETE_SLOTS: '100',
+      DISCORD_TOKEN: 'discord-secret',
+      YOUTUBE_API_KEY: 'youtube-secret',
+    });
+    expect(new clampedModule.default().AUTOCOMPLETE_SLOTS).toBe(25);
+
+    const invalidModule = await loadConfig({
+      AUTOCOMPLETE_SLOTS: '0',
+      DISCORD_TOKEN: 'discord-secret',
+      YOUTUBE_API_KEY: 'youtube-secret',
+    });
+    expect(() => new invalidModule.default()).toThrow('Invalid numeric value for AUTOCOMPLETE_SLOTS: value must be at least 1');
   });
 
   it('uses the default data/cache paths and two-gigabyte cache limit', async () => {

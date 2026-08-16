@@ -9,9 +9,14 @@ dotenv.config({path: process.env.ENV_FILE ?? path.resolve(process.cwd(), '.env')
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR ? process.env.DATA_DIR : './data');
 
+export const DISCORD_AUTOCOMPLETE_CHOICE_LIMIT = 25;
+export const DEFAULT_AUTOCOMPLETE_SLOTS = 25;
+
 const firstNonEmpty = (...values: Array<string | undefined>) => values
   .map(value => value?.trim())
   .find((value): value is string => Boolean(value));
+
+const parseAutocompleteSlots = (raw: string | undefined): number => Number.parseInt(firstNonEmpty(raw) ?? String(DEFAULT_AUTOCOMPLETE_SLOTS), 10);
 
 const CONFIG_MAP = {
   DISCORD_TOKEN: firstNonEmpty(process.env.DISCORD_TOKEN),
@@ -31,6 +36,7 @@ const CONFIG_MAP = {
   BOT_ACTIVITY: process.env.BOT_ACTIVITY ?? 'music',
   ENABLE_SPONSORBLOCK: process.env.ENABLE_SPONSORBLOCK === 'true',
   SPONSORBLOCK_TIMEOUT: parseInt(process.env.SPONSORBLOCK_TIMEOUT ?? '5', 10),
+  AUTOCOMPLETE_SLOTS: parseAutocompleteSlots(process.env.AUTOCOMPLETE_SLOTS),
   YT_DLP_PATH: firstNonEmpty(process.env.YT_DLP_PATH, process.env.MUSE_BUNDLED_YT_DLP_PATH) ?? 'yt-dlp',
   YT_DLP_AUTO_UPDATE: process.env.YT_DLP_AUTO_UPDATE === 'true',
 } as const;
@@ -61,6 +67,7 @@ export default class Config {
   readonly BOT_ACTIVITY!: string;
   readonly ENABLE_SPONSORBLOCK!: boolean;
   readonly SPONSORBLOCK_TIMEOUT!: number;
+  readonly AUTOCOMPLETE_SLOTS!: number;
   readonly YT_DLP_PATH!: string;
   readonly YT_DLP_AUTO_UPDATE!: boolean;
 
@@ -83,6 +90,15 @@ export default class Config {
 
         if (key === 'CACHE_LIMIT_IN_BYTES' && value < 0) {
           throw new Error('Invalid numeric value for CACHE_LIMIT_IN_BYTES: value must be non-negative');
+        }
+
+        if (key === 'AUTOCOMPLETE_SLOTS') {
+          if (value < 1) {
+            throw new Error('Invalid numeric value for AUTOCOMPLETE_SLOTS: value must be at least 1');
+          }
+
+          this.AUTOCOMPLETE_SLOTS = Math.min(DISCORD_AUTOCOMPLETE_CHOICE_LIMIT, value);
+          continue;
         }
 
         this[key as ConditionalKeys<typeof CONFIG_MAP, number>] = value;

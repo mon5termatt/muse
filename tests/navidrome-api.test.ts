@@ -64,9 +64,9 @@ describe('NavidromeAPI library search', () => {
     expect(mocks.request).toHaveBeenNthCalledWith(1, 'search3.view', expect.objectContaining({
       searchParams: expect.objectContaining({
         query: 'Escapism Vol. 1',
-        albumCount: '10',
+        albumCount: '20',
         artistCount: '10',
-        songCount: '10',
+        songCount: '50',
       }),
     }));
     expect(mocks.request).toHaveBeenNthCalledWith(2, 'getAlbum.view', expect.objectContaining({
@@ -103,6 +103,39 @@ describe('NavidromeAPI library search', () => {
     expect(songs.map(song => song.url)).toEqual(['track-1', 'track-2']);
   });
 
+  it('matches album punctuation like Vol. vs Vol', async () => {
+    mocks.json
+      .mockResolvedValueOnce(subsonic({
+        searchResult3: {
+          album: {id: 'album-1', name: 'Escapism, Vol. 1', artist: 'Various'},
+          song: {
+            id: 'track-1',
+            title: 'Intro',
+            album: 'Escapism, Vol. 1',
+            parent: 'album-1',
+          },
+        },
+      }))
+      .mockResolvedValueOnce(subsonic({
+        album: {
+          id: 'album-1',
+          name: 'Escapism, Vol. 1',
+          song: [
+            {id: 'track-1', title: 'Intro', duration: 12},
+            {id: 'track-2', title: 'Outro', duration: 34},
+          ],
+        },
+      }));
+
+    const songs = await makeApi().search('Escapism Vol. 1', 50);
+
+    expect(songs.map(song => song.url)).toEqual(['track-1', 'track-2']);
+    expect(songs[0]?.playlist).toEqual({
+      title: 'Escapism, Vol. 1',
+      source: 'navidrome://album/album-1',
+    });
+  });
+
   it('falls back to the first song when nothing looks like an album match', async () => {
     mocks.json.mockResolvedValueOnce(subsonic({
       searchResult3: {
@@ -122,26 +155,65 @@ describe('NavidromeAPI library search', () => {
     expect(mocks.request).toHaveBeenCalledOnce();
   });
 
-  it('lists artists, albums, then songs in autocomplete', async () => {
+  it('suggests the album instead of each track when the query matches an album', async () => {
     mocks.json.mockResolvedValueOnce(subsonic({
       searchResult3: {
         artist: [{id: 'artist-1', name: 'Daft Punk'}],
         album: [{id: 'album-1', name: 'Escapism Vol. 1', artist: 'Various'}],
-        song: [{id: 'song-1', title: 'Intro', artist: 'A'}],
+        song: [
+          {id: 'song-1', title: 'Intro', artist: 'A', album: 'Escapism Vol. 1', albumId: 'album-1'},
+          {id: 'song-2', title: 'Outro', artist: 'B', album: 'Escapism Vol. 1', albumId: 'album-1'},
+        ],
       },
     }));
 
-    await expect(makeApi().suggest('Escapism', 10)).resolves.toEqual([
+    await expect(makeApi().suggest('Escapism Vol. 1', 10)).resolves.toEqual([
+      {
+        name: 'Library: 💿 Escapism Vol. 1 - Various',
+        value: 'navidrome://album/album-1',
+      },
+    ]);
+  });
+
+  it('infers an album suggestion from tracks when search3 omits the album', async () => {
+    mocks.json.mockResolvedValueOnce(subsonic({
+      searchResult3: {
+        album: [],
+        song: [
+          {id: 'song-1', title: 'Intro', artist: 'A', album: 'Escapism Vol. 1', albumId: 'album-1'},
+          {id: 'song-2', title: 'Outro', artist: 'B', album: 'Escapism Vol. 1', albumId: 'album-1'},
+        ],
+      },
+    }));
+
+    await expect(makeApi().suggest('Escapism Vol. 1', 10)).resolves.toEqual([
+      {
+        name: 'Library: 💿 Escapism Vol. 1 - A',
+        value: 'navidrome://album/album-1',
+      },
+    ]);
+  });
+
+  it('lists a matching artist before albums when the query is the artist name', async () => {
+    mocks.json.mockResolvedValueOnce(subsonic({
+      searchResult3: {
+        artist: [{id: 'artist-1', name: 'Daft Punk'}],
+        album: [{id: 'album-1', name: 'Homework', artist: 'Daft Punk'}],
+        song: [{id: 'song-1', title: 'Around the World', artist: 'Daft Punk'}],
+      },
+    }));
+
+    await expect(makeApi().suggest('Daft Punk', 10)).resolves.toEqual([
       {
         name: 'Library: 🎤 Daft Punk',
         value: 'navidrome://artist/artist-1',
       },
       {
-        name: 'Library: 💿 Escapism Vol. 1 - Various',
+        name: 'Library: 💿 Homework - Daft Punk',
         value: 'navidrome://album/album-1',
       },
       {
-        name: 'Library: 🎵 A - Intro',
+        name: 'Library: 🎵 Daft Punk - Around the World',
         value: 'navidrome://song/song-1',
       },
     ]);

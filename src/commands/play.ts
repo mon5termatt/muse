@@ -11,7 +11,9 @@ import KeyValueCacheProvider from '../services/key-value-cache.js';
 import {ONE_HOUR_IN_SECONDS} from '../utils/constants.js';
 import AddQueryToQueue from '../services/add-query-to-queue.js';
 import NavidromeAPI from '../services/navidrome-api.js';
+import Config, {DEFAULT_AUTOCOMPLETE_SLOTS} from '../services/config.js';
 import {PlaySource} from '../services/get-songs.js';
+import {mergePlayAutocomplete} from '../utils/merge-play-autocomplete.js';
 
 @injectable()
 export default class implements Command {
@@ -23,17 +25,20 @@ export default class implements Command {
   private readonly cache: KeyValueCacheProvider;
   private readonly addQueryToQueue: AddQueryToQueue;
   private readonly navidromeAPI?: NavidromeAPI;
+  private readonly autocompleteSlots: number;
 
   constructor(
     @inject(TYPES.ThirdParty) @optional() thirdParty: ThirdParty,
     @inject(TYPES.KeyValueCache) cache: KeyValueCacheProvider,
     @inject(TYPES.Services.AddQueryToQueue) addQueryToQueue: AddQueryToQueue,
     @inject(TYPES.Services.NavidromeAPI) @optional() navidromeAPI?: NavidromeAPI,
+    @inject(TYPES.Config) @optional() config?: Config,
   ) {
     this.spotify = thirdParty?.spotify;
     this.cache = cache;
     this.addQueryToQueue = addQueryToQueue;
     this.navidromeAPI = navidromeAPI;
+    this.autocompleteSlots = config?.AUTOCOMPLETE_SLOTS ?? DEFAULT_AUTOCOMPLETE_SLOTS;
 
     const queryDescription = this.buildQueryDescription(thirdParty !== undefined, navidromeAPI !== undefined);
 
@@ -113,10 +118,10 @@ export default class implements Command {
       }
 
       const suggestions = await this.cache.wrap(
-        async () => navidromeAPI.suggest(query, 10),
+        async () => navidromeAPI.suggest(query, this.autocompleteSlots),
         {
           expiresIn: ONE_HOUR_IN_SECONDS,
-          key: `autocomplete:library:${query}`,
+          key: `autocomplete:library:v2:${this.autocompleteSlots}:${query}`,
         },
       );
 
@@ -131,10 +136,10 @@ export default class implements Command {
         getYouTubeAndSpotifySuggestionsFor,
         query,
         this.spotify,
-        10,
+        this.autocompleteSlots,
         {
           expiresIn: ONE_HOUR_IN_SECONDS,
-          key: `autocomplete:${query}`,
+          key: `autocomplete:${this.autocompleteSlots}:${query}`,
         });
     } catch (error: unknown) {
       if (error instanceof SpotifySuggestionsUnavailableError) {
@@ -147,14 +152,18 @@ export default class implements Command {
     const {navidromeAPI} = this;
     if (navidromeAPI !== undefined && interaction.options.getString('source') !== 'youtube') {
       const librarySuggestions = await this.cache.wrap(
-        async () => navidromeAPI.suggest(query, 6),
+        async () => navidromeAPI.suggest(query, this.autocompleteSlots),
         {
           expiresIn: ONE_HOUR_IN_SECONDS,
-          key: `autocomplete:library:${query}`,
+          key: `autocomplete:library:v2:${this.autocompleteSlots}:${query}`,
         },
       );
-      const remaining = Math.max(0, 10 - librarySuggestions.length);
-      suggestions = [...librarySuggestions, ...suggestions.slice(0, remaining)];
+      const spotifySuggestions = suggestions.filter(suggestion => suggestion.name.startsWith('Spotify:'));
+      const youtubeSuggestions = suggestions.filter(suggestion => !suggestion.name.startsWith('Spotify:'));
+      suggestions = mergePlayAutocomplete(
+        [librarySuggestions, spotifySuggestions, youtubeSuggestions],
+        this.autocompleteSlots,
+      );
     }
 
     await interaction.respond(suggestions);

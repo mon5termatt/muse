@@ -174,7 +174,7 @@ const makeQueuedSong = (title: string): QueuedSong => ({
   requestedBy: 'requester-id',
 });
 
-const makeAutocompleteHarness = (query: string, spotify?: object) => {
+const makeAutocompleteHarness = (query: string, spotify?: object, navidromeAPI?: object) => {
   const cache = {
     wrap: vi.fn(async (operation: (...args: unknown[]) => Promise<unknown>, ...args: unknown[]) => (
       operation(...args.slice(0, -1))
@@ -184,7 +184,13 @@ const makeAutocompleteHarness = (query: string, spotify?: object) => {
     options: {getString: vi.fn(() => query)},
     respond: vi.fn().mockResolvedValue(undefined),
   };
-  const command = new Play(spotify ? {spotify} as never : undefined as never, cache as never, {} as never);
+  const command = new Play(
+    spotify ? {spotify} as never : undefined as never,
+    cache as never,
+    {} as never,
+    navidromeAPI as never,
+    {AUTOCOMPLETE_SLOTS: 10} as never,
+  );
 
   return {cache, command, interaction};
 };
@@ -264,7 +270,7 @@ describe('PLAY-06 autocomplete preservation', () => {
       'Queen:Bohemian Rhapsody',
       undefined,
       10,
-      {expiresIn: 3600, key: 'autocomplete:Queen:Bohemian Rhapsody'},
+      {expiresIn: 3600, key: 'autocomplete:10:Queen:Bohemian Rhapsody'},
     );
   });
 
@@ -383,6 +389,36 @@ describe('PLAY-06 autocomplete preservation', () => {
       value: `YouTube ${index + 1}`,
     })));
     expect(spotify.search).toHaveBeenCalledWith('mix', ['album', 'track'], {limit: 10});
+  });
+
+  it('keeps Spotify visible when the library would otherwise fill every autocomplete slot', async () => {
+    dependencyMocks.got.mockReturnValue({
+      json: vi.fn().mockResolvedValue(['mix', Array.from({length: 10}, (_, index) => `YouTube ${index + 1}`)]),
+    });
+    const spotify = {
+      search: vi.fn().mockResolvedValue({
+        body: {
+          albums: {items: [{id: 'album-1', name: 'Escapism Vol. 1', artists: [{name: 'Levity'}]}]},
+          tracks: {items: [{id: 'track-1', name: 'Ignition', artists: [{name: 'Levity'}]}]},
+        },
+      }),
+    };
+    const navidromeAPI = {
+      suggest: vi.fn().mockResolvedValue(Array.from({length: 10}, (_, index) => ({
+        name: `Library: Levity - Track ${index + 1}`,
+        value: `navidrome://song/song-${index + 1}`,
+      }))),
+    };
+    const {command, interaction} = makeAutocompleteHarness('Escapism Vol. 1', spotify, navidromeAPI);
+
+    await command.handleAutocompleteInteraction(interaction as never);
+
+    const choices = interaction.respond.mock.calls[0][0] as Array<{name: string; value: string}>;
+    expect(choices).toHaveLength(10);
+    expect(choices.filter(choice => choice.name.startsWith('Library:'))).toHaveLength(4);
+    expect(choices.filter(choice => choice.name.startsWith('Spotify:'))).toHaveLength(2);
+    expect(choices.filter(choice => choice.name.startsWith('YouTube:'))).toHaveLength(4);
+    expect(navidromeAPI.suggest).toHaveBeenCalledWith('Escapism Vol. 1', 10);
   });
 });
 

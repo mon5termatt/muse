@@ -24,6 +24,7 @@ interface SubsonicChild {
   duration?: number;
   coverArt?: string;
   albumId?: string;
+  parent?: string;
 }
 
 interface SubsonicAlbum {
@@ -153,16 +154,17 @@ export default class {
     const allowSongFallback = options.allowSongFallback ?? true;
     const {artists, albums, songs} = await this.searchLibrary(query, {
       artistCount: 10,
-      albumCount: 10,
-      songCount: 10,
+      albumCount: 20,
+      songCount: 50,
     });
+    const knownAlbums = this.mergeAlbums(albums, this.albumsFromSongs(songs));
 
     const artist = this.pickArtistMatch(query, artists, songs);
     if (artist) {
       return this.getArtistDiscography(artist.id, playlistLimit);
     }
 
-    const album = this.pickAlbumMatch(query, albums, songs);
+    const album = this.pickAlbumMatch(query, knownAlbums, songs);
     if (album) {
       return this.getAlbum(album.id, playlistLimit);
     }
@@ -190,17 +192,15 @@ export default class {
     const albumSlots = Math.min(3, Math.ceil(limit / 3));
     const {artists, albums, songs} = await this.searchLibrary(query, {
       artistCount: artistSlots,
-      albumCount: albumSlots,
-      songCount: limit,
+      albumCount: 20,
+      songCount: Math.max(limit, 50),
     });
+    const knownAlbums = this.mergeAlbums(albums, this.albumsFromSongs(songs))
+      .sort((left, right) => this.albumMatchRank(query, left) - this.albumMatchRank(query, right));
+    const matchingArtists = artists.filter(artist => this.namesMatch(artist.name, query) || this.nameContains(artist.name, query));
+    const preferAlbums = knownAlbums.some(album => this.albumMatchRank(query, album) <= 1);
 
-    const artistSuggestions = artists.slice(0, artistSlots).map(artist => ({
-      name: this.truncateChoice(`Library: 🎤 ${this.displayText(artist.name, artist.id)}`),
-      value: this.getResourceUri('artist', artist.id),
-    }));
-
-    const remainingAfterArtists = Math.max(0, limit - artistSuggestions.length);
-    const albumSuggestions = albums.slice(0, Math.min(albumSlots, remainingAfterArtists)).map(album => {
+    const albumSuggestions = knownAlbums.slice(0, albumSlots).map(album => {
       const albumName = this.displayText(album.name, album.id);
       const artist = this.displayText(album.artist, '');
       const label = artist === '' ? albumName : `${albumName} - ${artist}`;
@@ -209,18 +209,42 @@ export default class {
         value: this.getResourceUri('album', album.id),
       };
     });
+    const artistSuggestions = matchingArtists.slice(0, artistSlots).map(artist => ({
+      name: this.truncateChoice(`Library: 🎤 ${this.displayText(artist.name, artist.id)}`),
+      value: this.getResourceUri('artist', artist.id),
+    }));
 
-    const remaining = Math.max(0, limit - artistSuggestions.length - albumSuggestions.length);
-    const songSuggestions = songs.slice(0, remaining).map(song => {
-      const artist = this.displayText(song.artist, 'Unknown artist');
-      const title = this.displayText(song.title, song.id);
-      return {
-        name: this.truncateChoice(`Library: 🎵 ${artist} - ${title}`),
-        value: this.getResourceUri('song', song.id),
-      };
-    });
+    const leading = preferAlbums
+      ? [...albumSuggestions, ...artistSuggestions]
+      : [...artistSuggestions, ...albumSuggestions];
+    const leadingTrimmed = leading.slice(0, limit);
+    const suggestedAlbumIds = new Set(
+      leadingTrimmed
+        .filter(suggestion => suggestion.value.startsWith('navidrome://album/'))
+        .map(suggestion => decodeURIComponent(suggestion.value.slice('navidrome://album/'.length))),
+    );
 
-    return [...artistSuggestions, ...albumSuggestions, ...songSuggestions];
+    const remaining = Math.max(0, limit - leadingTrimmed.length);
+    const songSuggestions = songs
+      .filter(song => {
+        if (!preferAlbums || this.namesMatch(song.title, query) || this.nameContains(song.title, query)) {
+          return true;
+        }
+
+        const albumId = this.albumIdFromSong(song);
+        return !albumId || !suggestedAlbumIds.has(albumId);
+      })
+      .slice(0, remaining)
+      .map(song => {
+        const artist = this.displayText(song.artist, 'Unknown artist');
+        const title = this.displayText(song.title, song.id);
+        return {
+          name: this.truncateChoice(`Library: 🎵 ${artist} - ${title}`),
+          value: this.getResourceUri('song', song.id),
+        };
+      });
+
+    return [...leadingTrimmed, ...songSuggestions];
   }
 
   async resolveUrl(input: string | URL, playlistLimit: number): Promise<SongMetadata[]> {
@@ -263,7 +287,7 @@ export default class {
       source: this.getResourceUri('album', album.id),
     };
 
-    return (album.song ?? [])
+    return this.asArray(album.song)
       .slice(0, playlistLimit)
       .map(song => this.toSongMetadata(song, playlist));
   }
@@ -280,7 +304,7 @@ export default class {
       source: this.getResourceUri('playlist', playlistResponse.id),
     };
 
-    return (playlistResponse.entry ?? [])
+    return this.asArray(playlistResponse.entry)
       .slice(0, playlistLimit)
       .map(song => this.toSongMetadata(song, playlist));
   }
@@ -298,7 +322,7 @@ export default class {
     };
 
     const songs: SongMetadata[] = [];
-    for (const album of artist.album ?? []) {
+    for (const album of this.asArray(artist.album)) {
       if (songs.length >= playlistLimit) {
         break;
       }
@@ -340,9 +364,9 @@ export default class {
     });
 
     return {
-      albums: response.searchResult3?.album ?? [],
-      artists: response.searchResult3?.artist ?? [],
-      songs: response.searchResult3?.song ?? [],
+      albums: this.asArray(response.searchResult3?.album),
+      artists: this.asArray(response.searchResult3?.artist),
+      songs: this.asArray(response.searchResult3?.song),
     };
   }
 
@@ -377,13 +401,16 @@ export default class {
       return exactAlbum;
     }
 
-    const songFromNamedAlbum = songs.find(song => this.namesMatch(song.album, query) && Boolean(song.albumId));
-    if (songFromNamedAlbum?.albumId) {
-      return albums.find(album => album.id === songFromNamedAlbum.albumId) ?? {
-        id: songFromNamedAlbum.albumId,
-        name: songFromNamedAlbum.album,
-        artist: songFromNamedAlbum.artist,
-      };
+    const songFromNamedAlbum = songs.find(song => this.namesMatch(song.album, query) && Boolean(this.albumIdFromSong(song)));
+    if (songFromNamedAlbum) {
+      const albumId = this.albumIdFromSong(songFromNamedAlbum);
+      if (albumId !== undefined) {
+        return albums.find(album => album.id === albumId) ?? {
+          id: albumId,
+          name: songFromNamedAlbum.album,
+          artist: songFromNamedAlbum.artist,
+        };
+      }
     }
 
     if (songs.some(song => this.namesMatch(song.title, query))) {
@@ -391,6 +418,68 @@ export default class {
     }
 
     return albums.find(album => this.nameContains(album.name, query));
+  }
+
+  private albumsFromSongs(songs: SubsonicChild[]): SubsonicAlbum[] {
+    const albums = new Map<string, SubsonicAlbum>();
+
+    for (const song of songs) {
+      const albumId = this.albumIdFromSong(song);
+      if (!albumId || albums.has(albumId)) {
+        continue;
+      }
+
+      albums.set(albumId, {
+        id: albumId,
+        name: song.album,
+        artist: song.artist,
+      });
+    }
+
+    return [...albums.values()];
+  }
+
+  private mergeAlbums(...groups: SubsonicAlbum[][]): SubsonicAlbum[] {
+    const albums = new Map<string, SubsonicAlbum>();
+
+    for (const group of groups) {
+      for (const album of group) {
+        if (!albums.has(album.id)) {
+          albums.set(album.id, album);
+        }
+      }
+    }
+
+    return [...albums.values()];
+  }
+
+  private albumMatchRank(query: string, album: SubsonicAlbum): number {
+    if (this.namesMatch(album.name, query)) {
+      return 0;
+    }
+
+    if (this.nameContains(album.name, query)) {
+      return 1;
+    }
+
+    return 2;
+  }
+
+  private albumIdFromSong(song: SubsonicChild): string | undefined {
+    const albumId = song.albumId ?? song.parent;
+    if (albumId === undefined || albumId === '') {
+      return undefined;
+    }
+
+    return albumId;
+  }
+
+  private asArray<T>(value: T | T[] | undefined | null): T[] {
+    if (value === undefined || value === null) {
+      return [];
+    }
+
+    return Array.isArray(value) ? value : [value];
   }
 
   private namesMatch(left: string | undefined, right: string | undefined): boolean {
@@ -406,7 +495,13 @@ export default class {
   }
 
   private normalizeName(value: string | undefined): string {
-    return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return (value ?? '')
+      .toLowerCase()
+      .replace(/&/g, ' and ')
+      .replace(/\bvolume\b/g, 'vol')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
   }
 
   private toSongMetadata(song: SubsonicChild, playlist: QueuedPlaylist | null = null): SongMetadata {
